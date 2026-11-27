@@ -1,0 +1,14 @@
+let query = query_decode("tag=go&tag=sitka&q=language")
+let address = url_parse("https://sitka.example/docs?chapter=language#builtins")
+
+print query.tag
+print address.hostname, address.path
+print url_build({
+    "scheme": address.scheme,
+    "host": address.host,
+    "path": address.path,
+    "raw_query": address.raw_query,
+    "fragment": address.fragment
+})
+print base64_decode(base64_encode("Sitka 🌲"))
+print sha256("Sitka")

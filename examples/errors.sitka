@@ -1,0 +1,11 @@
+fun parseCount(text) {
+    try {
+        return int(text)
+    } catch problem {
+        print "Could not parse count:", problem
+        return 0
+    }
+}
+
+let count = parseCount("not a number")
+print "Using count:", count

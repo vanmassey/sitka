@@ -1,0 +1,8 @@
+let text = "Order 1042 shipped; order 1043 is pending."
+let ids = regex_find_all(text, "[0-9]+")
+let withoutIds = regex_replace(text, "[0-9]+", "<id>")
+let match = regex_captures("Ada Lovelace", "(?P<first>[A-Z][a-z]+) (?P<last>[A-Z][a-z]+)")
+
+print ids
+print withoutIds
+print match.first, match.last

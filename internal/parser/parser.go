@@ -40,7 +40,69 @@ func (p *Parser) parseDeclaration() (ast.Stmt, error) {
 	if p.match(lexer.TokenFun) {
 		return p.parseFunctionDeclaration()
 	}
+	if p.match(lexer.TokenImport) {
+		return p.parseImport()
+	}
+	if p.match(lexer.TokenStruct) {
+		return p.parseStructDeclaration()
+	}
 	return p.parseStatement()
+}
+
+func (p *Parser) parseImport() (ast.Stmt, error) {
+	token := p.previous()
+	path, err := p.consume(lexer.TokenString, "expected a quoted module path after 'import'")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.consume(lexer.TokenIdentifier, "expected 'as' and an import name"); err != nil {
+		return nil, err
+	} else if p.previous().Text != "as" {
+		return nil, fmt.Errorf("expected 'as' after module path at line %d", p.previous().Line)
+	}
+	alias, err := p.consume(lexer.TokenIdentifier, "expected import name after 'as'")
+	if err != nil {
+		return nil, err
+	}
+	p.consumeOptionalSeparator()
+	return ast.ImportStmt{Path: path.Value, Alias: alias.Text, Line: token.Line}, nil
+}
+
+func (p *Parser) parseStructDeclaration() (ast.Stmt, error) {
+	token := p.previous()
+	name, err := p.consume(lexer.TokenIdentifier, "expected struct name")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.consume(lexer.TokenLeftBrace, "expected '{' after struct name"); err != nil {
+		return nil, err
+	}
+
+	fields := make([]string, 0)
+	for !p.check(lexer.TokenRightBrace) && !p.check(lexer.TokenEnd) {
+		p.skipSeparators()
+		if p.check(lexer.TokenRightBrace) {
+			break
+		}
+		field, err := p.consume(lexer.TokenIdentifier, "expected field name")
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, field.Text)
+		if p.match(lexer.TokenComma) {
+			continue
+		}
+		if !p.check(lexer.TokenNewline) && !p.check(lexer.TokenSemicolon) &&
+			!p.check(lexer.TokenRightBrace) {
+			return nil, fmt.Errorf("expected a separator after field %q at line %d", field.Text, field.Line)
+		}
+		p.skipSeparators()
+	}
+	if _, err := p.consume(lexer.TokenRightBrace, "expected '}' after struct fields"); err != nil {
+		return nil, err
+	}
+	p.consumeOptionalSeparator()
+	return ast.StructDecl{Name: name.Text, Fields: fields, Line: token.Line}, nil
 }
 
 func (p *Parser) parseVarDeclaration() (ast.Stmt, error) {
@@ -103,6 +165,9 @@ func (p *Parser) parseStatement() (ast.Stmt, error) {
 	if p.match(lexer.TokenFor) {
 		return p.parseFor()
 	}
+	if p.match(lexer.TokenTry) {
+		return p.parseTry()
+	}
 	if p.check(lexer.TokenLeftBrace) && !p.mapLiteralAhead() {
 		p.advance()
 		block, err := p.parseBlockContents()
@@ -133,6 +198,18 @@ func (p *Parser) parseStatement() (ast.Stmt, error) {
 		}
 		p.consumeOptionalSeparator()
 		return ast.ReturnStmt{Value: value, Line: token.Line}, nil
+	}
+	if p.match(lexer.TokenThrow) {
+		token := p.previous()
+		if p.checkSeparator() || p.check(lexer.TokenRightBrace) || p.check(lexer.TokenEnd) {
+			return nil, fmt.Errorf("expected a value after 'throw' at line %d", token.Line)
+		}
+		value, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		p.consumeOptionalSeparator()
+		return ast.ThrowStmt{Value: value, Line: token.Line}, nil
 	}
 	return p.parseExpressionStatement()
 }
@@ -220,6 +297,27 @@ func (p *Parser) parseFor() (ast.Stmt, error) {
 	return ast.ForStmt{Variable: variable.Text, Iterable: iterable, Body: body, Line: token.Line}, nil
 }
 
+func (p *Parser) parseTry() (ast.Stmt, error) {
+	token := p.previous()
+	body, err := p.parseBlock()
+	if err != nil {
+		return nil, err
+	}
+	p.skipSeparators()
+	if _, err := p.consume(lexer.TokenCatch, "expected 'catch' after try block"); err != nil {
+		return nil, err
+	}
+	errorName, err := p.consume(lexer.TokenIdentifier, "expected an error variable after 'catch'")
+	if err != nil {
+		return nil, err
+	}
+	catchBlock, err := p.parseBlock()
+	if err != nil {
+		return nil, err
+	}
+	return ast.TryStmt{Body: body, ErrorName: errorName.Text, Catch: catchBlock, Line: token.Line}, nil
+}
+
 func (p *Parser) parseBlock() (ast.Block, error) {
 	open, err := p.consume(lexer.TokenLeftBrace, "expected '{'")
 	if err != nil {
@@ -279,6 +377,8 @@ func (p *Parser) parseAssignment() (ast.Expr, error) {
 			return ast.Assign{Name: target.Name, Value: value, Line: equals.Line}, nil
 		case ast.Index:
 			return ast.IndexAssign{Object: target.Object, Index: target.Index, Value: value, Line: equals.Line}, nil
+		case ast.Get:
+			return ast.Set{Object: target.Object, Name: target.Name, Value: value, Line: equals.Line}, nil
 		default:
 			return nil, fmt.Errorf("invalid assignment target at line %d", equals.Line)
 		}
