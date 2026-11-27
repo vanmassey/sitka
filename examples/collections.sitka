@@ -1,0 +1,10 @@
+let numbers = [1, 2, 3, 4, 5]
+let doubled = []
+
+for number in numbers {
+    doubled = push(doubled, number * 2)
+}
+
+let person = {"name": "Ada", "language": "Sitka"}
+print person["name"]
+print doubled

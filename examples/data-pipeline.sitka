@@ -1,0 +1,12 @@
+let numbers = range(1, 11)
+let evenNumbers = filter(numbers, fun(value) {
+    return value % 2 == 0
+})
+let squares = map(evenNumbers, fun(value) {
+    return value * value
+})
+
+print "Even numbers:", join(evenNumbers, ", ")
+print "Squares:", join(squares, ", ")
+print "Sum:", sum(squares)
+print "Pairs:", zip(evenNumbers, squares)

@@ -1,0 +1,4 @@
+print "Hello, Sitka!"
+
+let name = "Ada"
+print "Welcome,", name
