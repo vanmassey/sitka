@@ -3,12 +3,16 @@ package interpreter
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/vanmassey/sitka/internal/ast"
+	"github.com/vanmassey/sitka/internal/lexer"
+	"github.com/vanmassey/sitka/internal/parser"
 )
 
 type Value any
@@ -52,7 +56,9 @@ func (environment *Environment) Assign(name string, value Value) bool {
 }
 
 type Runtime struct {
-	Globals *Environment
+	Globals     *Environment
+	modules     map[string]*moduleRecord
+	currentPath string
 }
 
 type controlKind int
@@ -74,6 +80,22 @@ type function struct {
 	parameters []string
 	body       ast.Block
 	closure    *Environment
+	sourcePath string
+}
+
+type structType struct {
+	name   string
+	fields []string
+}
+
+type structInstance struct {
+	kind   *structType
+	fields map[string]Value
+}
+
+type moduleRecord struct {
+	environment *Environment
+	loading     bool
 }
 
 type builtin struct {
@@ -82,9 +104,21 @@ type builtin struct {
 }
 
 func New() *Runtime {
+	return NewWithArgs(nil)
+}
+
+func NewWithArgs(arguments []string) *Runtime {
 	globals := NewEnvironment(nil)
-	runtime := &Runtime{Globals: globals}
+	runtime := &Runtime{
+		Globals: globals,
+		modules: make(map[string]*moduleRecord),
+	}
 	runtime.installBuiltins()
+	values := make([]Value, len(arguments))
+	for index, argument := range arguments {
+		values[index] = argument
+	}
+	globals.Define("args", values)
 	return runtime
 }
 
@@ -316,6 +350,16 @@ func (runtime *Runtime) installBuiltins() {
 		}
 	}})
 	runtime.installExtendedBuiltins()
+	runtime.installJSONBuiltins()
+	runtime.installFilesystemBuiltins()
+	runtime.installCSVBuiltins()
+	runtime.installRegexBuiltins()
+	runtime.installPathBuiltins()
+	runtime.installTimeBuiltins()
+	runtime.installCollectionBuiltins()
+	runtime.installStringBuiltins()
+	runtime.installMathBuiltins()
+	runtime.installEncodingBuiltins()
 }
 
 func (runtime *Runtime) Execute(program ast.Program) (Value, error) {
@@ -327,6 +371,116 @@ func (runtime *Runtime) Execute(program ast.Program) (Value, error) {
 		return nil, fmt.Errorf("unexpected control flow")
 	}
 	return value, nil
+}
+
+func (runtime *Runtime) ExecuteFile(path string) (Value, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve source path %q: %w", path, err)
+	}
+	source, err := os.ReadFile(absolutePath)
+	if err != nil {
+		return nil, fmt.Errorf("read source file %q: %w", path, err)
+	}
+	program, err := parseSource(string(source))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
+	if runtime.modules == nil {
+		runtime.modules = make(map[string]*moduleRecord)
+	}
+	record := &moduleRecord{environment: runtime.Globals, loading: true}
+	runtime.modules[absolutePath] = record
+
+	previousPath := runtime.currentPath
+	runtime.currentPath = absolutePath
+	value, result, executionErr := runtime.executeBlock(
+		ast.Block{Statements: program.Statements, Line: program.Line},
+		runtime.Globals,
+	)
+	runtime.currentPath = previousPath
+	if executionErr != nil {
+		delete(runtime.modules, absolutePath)
+		return nil, executionErr
+	}
+	if result.kind != controlNone {
+		delete(runtime.modules, absolutePath)
+		return nil, fmt.Errorf("unexpected control flow at top level")
+	}
+	record.loading = false
+	return value, nil
+}
+
+func parseSource(source string) (ast.Program, error) {
+	tokens, err := lexer.Lex(source)
+	if err != nil {
+		return ast.Program{}, err
+	}
+	return parser.Parse(tokens)
+}
+
+func (runtime *Runtime) importModule(modulePath string, line int) (map[string]Value, error) {
+	targetPath := modulePath
+	if !filepath.IsAbs(targetPath) {
+		base := "."
+		if runtime.currentPath != "" {
+			base = filepath.Dir(runtime.currentPath)
+		}
+		targetPath = filepath.Join(base, targetPath)
+	}
+	absolutePath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve import %q at line %d: %w", modulePath, line, err)
+	}
+
+	if cached, found := runtime.modules[absolutePath]; found {
+		if cached.loading {
+			return nil, fmt.Errorf("circular import of %q at line %d", modulePath, line)
+		}
+		return moduleExports(cached.environment), nil
+	}
+
+	source, err := os.ReadFile(absolutePath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot import %q at line %d: %w", modulePath, line, err)
+	}
+	program, err := parseSource(string(source))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", modulePath, err)
+	}
+
+	moduleEnvironment := NewEnvironment(runtime.Globals)
+	record := &moduleRecord{environment: moduleEnvironment, loading: true}
+	runtime.modules[absolutePath] = record
+	previousPath := runtime.currentPath
+	runtime.currentPath = absolutePath
+	_, result, err := runtime.executeBlock(
+		ast.Block{Statements: program.Statements, Line: program.Line},
+		moduleEnvironment,
+	)
+	runtime.currentPath = previousPath
+	if err != nil {
+		delete(runtime.modules, absolutePath)
+		return nil, fmt.Errorf("while importing %q: %w", modulePath, err)
+	}
+	if result.kind != controlNone {
+		delete(runtime.modules, absolutePath)
+		return nil, fmt.Errorf("unexpected control flow in module %q", modulePath)
+	}
+
+	record.loading = false
+	return moduleExports(moduleEnvironment), nil
+}
+
+func moduleExports(environment *Environment) map[string]Value {
+	exports := make(map[string]Value)
+	for name, value := range environment.values {
+		if !strings.HasPrefix(name, "_") {
+			exports[name] = value
+		}
+	}
+	return exports
 }
 
 func (runtime *Runtime) executeBlock(block ast.Block, environment *Environment) (Value, control, error) {
@@ -488,17 +642,49 @@ func (runtime *Runtime) executeStatement(statement ast.Stmt, environment *Enviro
 			}
 		}
 		return value, control{kind: controlReturn, value: value}, nil
+	case ast.ThrowStmt:
+		value, err := runtime.evaluate(statement.Value, environment)
+		if err != nil {
+			return nil, control{}, err
+		}
+		return nil, control{}, fmt.Errorf("thrown on line %d: %s", statement.Line, Format(value))
+	case ast.TryStmt:
+		value, result, err := runtime.executeBlock(statement.Body, NewEnvironment(environment))
+		if err == nil {
+			return value, result, nil
+		}
+		catchEnvironment := NewEnvironment(environment)
+		catchEnvironment.Define(statement.ErrorName, err.Error())
+		return runtime.executeBlock(statement.Catch, catchEnvironment)
 	case ast.FunctionDecl:
 		runtimeFunction := &function{
 			name:       statement.Name,
 			parameters: statement.Parameters,
 			body:       statement.Body,
 			closure:    environment,
+			sourcePath: runtime.currentPath,
 		}
 		environment.Define(statement.Name, runtimeFunction)
 		return nil, control{}, nil
+	case ast.StructDecl:
+		structure := &structType{
+			name:   statement.Name,
+			fields: append([]string(nil), statement.Fields...),
+		}
+		environment.Define(statement.Name, structure)
+		return nil, control{}, nil
+	case ast.ImportStmt:
+		module, err := runtime.importModule(statement.Path, statement.Line)
+		if err != nil {
+			return nil, control{}, err
+		}
+		environment.Define(statement.Alias, module)
+		return nil, control{}, nil
 	case ast.Block:
 		return runtime.executeBlock(statement, NewEnvironment(environment))
+	case ast.Set:
+		value, err := runtime.evaluate(statement, environment)
+		return value, control{}, err
 	default:
 		return nil, control{}, fmt.Errorf("unknown statement")
 	}
@@ -528,6 +714,7 @@ func (runtime *Runtime) evaluate(expression ast.Expr, environment *Environment) 
 			parameters: expression.Parameters,
 			body:       expression.Body,
 			closure:    environment,
+			sourcePath: runtime.currentPath,
 		}, nil
 	case ast.Assign:
 		value, err := runtime.evaluate(expression.Value, environment)
@@ -536,6 +723,27 @@ func (runtime *Runtime) evaluate(expression ast.Expr, environment *Environment) 
 		}
 		if !environment.Assign(expression.Name, value) {
 			return nil, fmt.Errorf("undefined variable %q at line %d", expression.Name, expression.Line)
+		}
+		return value, nil
+	case ast.Set:
+		object, err := runtime.evaluate(expression.Object, environment)
+		if err != nil {
+			return nil, err
+		}
+		value, err := runtime.evaluate(expression.Value, environment)
+		if err != nil {
+			return nil, err
+		}
+		switch instance := object.(type) {
+		case *structInstance:
+			if _, found := instance.fields[expression.Name]; !found {
+				return nil, fmt.Errorf("%s has no field %q at line %d", instance.kind.name, expression.Name, expression.Line)
+			}
+			instance.fields[expression.Name] = value
+		case map[string]Value:
+			instance[expression.Name] = value
+		default:
+			return nil, fmt.Errorf("cannot set property on %s at line %d", TypeName(object), expression.Line)
 		}
 		return value, nil
 	case ast.Unary:
@@ -601,6 +809,15 @@ func (runtime *Runtime) evaluate(expression ast.Expr, environment *Environment) 
 				return nil, fmt.Errorf("map key must be a string")
 			}
 			container[key] = value
+		case *structInstance:
+			key, ok := index.(string)
+			if !ok {
+				return nil, fmt.Errorf("struct index must be a string")
+			}
+			if _, found := container.fields[key]; !found {
+				return nil, fmt.Errorf("%s has no field %q", container.kind.name, key)
+			}
+			container.fields[key] = value
 		default:
 			return nil, fmt.Errorf("cannot assign an index on %s", TypeName(object))
 		}
@@ -683,6 +900,16 @@ func (runtime *Runtime) evaluate(expression ast.Expr, environment *Environment) 
 				return nil, nil
 			}
 			return value, nil
+		case *structInstance:
+			key, ok := index.(string)
+			if !ok {
+				return nil, fmt.Errorf("struct index must be a string")
+			}
+			value, found := container.fields[key]
+			if !found {
+				return nil, fmt.Errorf("%s has no field %q", container.kind.name, key)
+			}
+			return value, nil
 		case string:
 			position, ok := index.(int64)
 			if !ok {
@@ -706,6 +933,13 @@ func (runtime *Runtime) evaluate(expression ast.Expr, environment *Environment) 
 			value, found := mapping[expression.Name]
 			if !found {
 				return nil, fmt.Errorf("map has no key %q", expression.Name)
+			}
+			return value, nil
+		}
+		if instance, ok := object.(*structInstance); ok {
+			value, found := instance.fields[expression.Name]
+			if !found {
+				return nil, fmt.Errorf("%s has no field %q at line %d", instance.kind.name, expression.Name, expression.Line)
 			}
 			return value, nil
 		}
@@ -733,6 +967,15 @@ func (runtime *Runtime) call(callee Value, arguments []Value) (Value, error) {
 	switch callable := callee.(type) {
 	case builtin:
 		return callable.call(arguments)
+	case *structType:
+		if len(arguments) != len(callable.fields) {
+			return nil, fmt.Errorf("%s expects %d fields, got %d", callable.name, len(callable.fields), len(arguments))
+		}
+		fields := make(map[string]Value, len(callable.fields))
+		for index, name := range callable.fields {
+			fields[name] = arguments[index]
+		}
+		return &structInstance{kind: callable, fields: fields}, nil
 	case *function:
 		if len(arguments) != len(callable.parameters) {
 			return nil, fmt.Errorf("function %q expects %d arguments, got %d", callable.name, len(callable.parameters), len(arguments))
@@ -741,7 +984,12 @@ func (runtime *Runtime) call(callee Value, arguments []Value) (Value, error) {
 		for index, parameter := range callable.parameters {
 			local.Define(parameter, arguments[index])
 		}
+		previousPath := runtime.currentPath
+		if callable.sourcePath != "" {
+			runtime.currentPath = callable.sourcePath
+		}
 		value, result, err := runtime.executeBlock(callable.body, local)
+		runtime.currentPath = previousPath
 		if err != nil {
 			return nil, err
 		}
@@ -1011,6 +1259,18 @@ func Equal(left, right Value) bool {
 			}
 		}
 		return true
+	case *structInstance:
+		rightInstance, ok := right.(*structInstance)
+		if !ok || left.kind.name != rightInstance.kind.name || len(left.fields) != len(rightInstance.fields) {
+			return false
+		}
+		for name, value := range left.fields {
+			other, found := rightInstance.fields[name]
+			if !found || !Equal(value, other) {
+				return false
+			}
+		}
+		return true
 	case map[string]Value:
 		rightMap, ok := right.(map[string]Value)
 		if !ok || len(left) != len(rightMap) {
@@ -1039,7 +1299,7 @@ func Truthy(value Value) bool {
 }
 
 func TypeName(value Value) string {
-	switch value.(type) {
+	switch value := value.(type) {
 	case nil:
 		return "nil"
 	case bool:
@@ -1054,6 +1314,10 @@ func TypeName(value Value) string {
 		return "list"
 	case map[string]Value:
 		return "map"
+	case *structType:
+		return "type"
+	case *structInstance:
+		return "struct " + value.kind.name
 	case builtin, *function:
 		return "function"
 	default:
@@ -1093,6 +1357,19 @@ func Format(value Value) string {
 			parts = append(parts, strconv.Quote(key)+": "+Format(value[key]))
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
+	case *structInstance:
+		keys := make([]string, 0, len(value.fields))
+		for key := range value.fields {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, key+": "+Format(value.fields[key]))
+		}
+		return value.kind.name + "{" + strings.Join(parts, ", ") + "}"
+	case *structType:
+		return "<struct " + value.name + ">"
 	case builtin:
 		return "<builtin " + value.name + ">"
 	case *function:

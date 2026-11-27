@@ -9,6 +9,8 @@ import (
 )
 
 func (runtime *Runtime) installExtendedBuiltins() {
+	runtime.Globals.Define("pi", math.Pi)
+	runtime.Globals.Define("e", math.E)
 	runtime.Globals.Define("map", builtin{"map", func(arguments []Value) (Value, error) {
 		values, callback, err := listAndCallback("map", arguments)
 		if err != nil {
@@ -398,6 +400,201 @@ func (runtime *Runtime) installExtendedBuiltins() {
 		}
 		return result, nil
 	}})
+	runtime.Globals.Define("count", builtin{"count", func(arguments []Value) (Value, error) {
+		if len(arguments) != 2 {
+			return nil, fmt.Errorf("count expects a container and value")
+		}
+		switch container := arguments[0].(type) {
+		case []Value:
+			var total int64
+			for _, value := range container {
+				if Equal(value, arguments[1]) {
+					total++
+				}
+			}
+			return total, nil
+		case string:
+			value, ok := arguments[1].(string)
+			if !ok {
+				return nil, fmt.Errorf("count on a string expects a string value")
+			}
+			return int64(strings.Count(container, value)), nil
+		default:
+			return nil, fmt.Errorf("count cannot search %s", TypeName(container))
+		}
+	}})
+	runtime.Globals.Define("index_of", builtin{"index_of", func(arguments []Value) (Value, error) {
+		if len(arguments) != 2 {
+			return nil, fmt.Errorf("index_of expects a list and value")
+		}
+		values, ok := arguments[0].([]Value)
+		if !ok {
+			return nil, fmt.Errorf("index_of first argument must be a list")
+		}
+		for index, value := range values {
+			if Equal(value, arguments[1]) {
+				return int64(index), nil
+			}
+		}
+		return int64(-1), nil
+	}})
+	runtime.Globals.Define("take", builtin{"take", func(arguments []Value) (Value, error) {
+		if len(arguments) != 2 {
+			return nil, fmt.Errorf("take expects a list and count")
+		}
+		values, ok := arguments[0].([]Value)
+		if !ok {
+			return nil, fmt.Errorf("take first argument must be a list")
+		}
+		count, ok := arguments[1].(int64)
+		if !ok {
+			return nil, fmt.Errorf("take count must be an integer")
+		}
+		end := clampSliceIndex(count, len(values))
+		return append([]Value(nil), values[:end]...), nil
+	}})
+	runtime.Globals.Define("drop", builtin{"drop", func(arguments []Value) (Value, error) {
+		if len(arguments) != 2 {
+			return nil, fmt.Errorf("drop expects a list and count")
+		}
+		values, ok := arguments[0].([]Value)
+		if !ok {
+			return nil, fmt.Errorf("drop first argument must be a list")
+		}
+		count, ok := arguments[1].(int64)
+		if !ok {
+			return nil, fmt.Errorf("drop count must be an integer")
+		}
+		start := clampSliceIndex(count, len(values))
+		return append([]Value(nil), values[start:]...), nil
+	}})
+	runtime.Globals.Define("chunk", builtin{"chunk", func(arguments []Value) (Value, error) {
+		if len(arguments) != 2 {
+			return nil, fmt.Errorf("chunk expects a list and chunk size")
+		}
+		values, ok := arguments[0].([]Value)
+		if !ok {
+			return nil, fmt.Errorf("chunk first argument must be a list")
+		}
+		size, ok := arguments[1].(int64)
+		if !ok || size <= 0 {
+			return nil, fmt.Errorf("chunk size must be a positive integer")
+		}
+		if len(values) == 0 {
+			return []Value{}, nil
+		}
+		if size > int64(len(values)) {
+			size = int64(len(values))
+		}
+		chunks := make([]Value, 0, (len(values)+int(size)-1)/int(size))
+		for start := 0; start < len(values); start += int(size) {
+			end := start + int(size)
+			if end > len(values) {
+				end = len(values)
+			}
+			chunks = append(chunks, append([]Value(nil), values[start:end]...))
+		}
+		return chunks, nil
+	}})
+	runtime.Globals.Define("partition", builtin{"partition", func(arguments []Value) (Value, error) {
+		values, callback, err := listAndCallback("partition", arguments)
+		if err != nil {
+			return nil, err
+		}
+		matching := make([]Value, 0)
+		other := make([]Value, 0)
+		for index, value := range values {
+			result, err := runtime.call(callback, []Value{value})
+			if err != nil {
+				return nil, fmt.Errorf("partition callback at index %d: %w", index, err)
+			}
+			if Truthy(result) {
+				matching = append(matching, value)
+			} else {
+				other = append(other, value)
+			}
+		}
+		return []Value{matching, other}, nil
+	}})
+	runtime.Globals.Define("find", builtin{"find", func(arguments []Value) (Value, error) {
+		values, callback, err := listAndCallback("find", arguments)
+		if err != nil {
+			return nil, err
+		}
+		for index, value := range values {
+			found, err := runtime.call(callback, []Value{value})
+			if err != nil {
+				return nil, fmt.Errorf("find callback at index %d: %w", index, err)
+			}
+			if Truthy(found) {
+				return value, nil
+			}
+		}
+		return nil, nil
+	}})
+	runtime.Globals.Define("sqrt", numericFunction("sqrt", 1, func(values []float64) (Value, error) {
+		if values[0] < 0 {
+			return nil, fmt.Errorf("sqrt argument cannot be negative")
+		}
+		return math.Sqrt(values[0]), nil
+	}))
+	runtime.Globals.Define("pow", numericFunction("pow", 2, func(values []float64) (Value, error) {
+		result := math.Pow(values[0], values[1])
+		if math.IsNaN(result) {
+			return nil, fmt.Errorf("pow arguments produce an invalid result")
+		}
+		if math.IsInf(result, 0) {
+			return nil, fmt.Errorf("pow result is out of range")
+		}
+		return result, nil
+	}))
+	runtime.Globals.Define("floor", numericFunction("floor", 1, func(values []float64) (Value, error) {
+		return math.Floor(values[0]), nil
+	}))
+	runtime.Globals.Define("ceil", numericFunction("ceil", 1, func(values []float64) (Value, error) {
+		return math.Ceil(values[0]), nil
+	}))
+	runtime.Globals.Define("round", numericFunction("round", 1, func(values []float64) (Value, error) {
+		return math.Round(values[0]), nil
+	}))
+	runtime.Globals.Define("clamp", numericFunction("clamp", 3, func(values []float64) (Value, error) {
+		if values[1] > values[2] {
+			return nil, fmt.Errorf("clamp minimum cannot exceed maximum")
+		}
+		return math.Max(values[1], math.Min(values[0], values[2])), nil
+	}))
+	runtime.Globals.Define("sign", numericFunction("sign", 1, func(values []float64) (Value, error) {
+		switch {
+		case values[0] < 0:
+			return int64(-1), nil
+		case values[0] > 0:
+			return int64(1), nil
+		default:
+			return int64(0), nil
+		}
+	}))
+	runtime.Globals.Define("radians", numericFunction("radians", 1, func(values []float64) (Value, error) {
+		return values[0] * math.Pi / 180, nil
+	}))
+	runtime.Globals.Define("degrees", numericFunction("degrees", 1, func(values []float64) (Value, error) {
+		return values[0] * 180 / math.Pi, nil
+	}))
+	runtime.Globals.Define("sin", numericFunction("sin", 1, func(values []float64) (Value, error) {
+		return math.Sin(values[0]), nil
+	}))
+	runtime.Globals.Define("cos", numericFunction("cos", 1, func(values []float64) (Value, error) {
+		return math.Cos(values[0]), nil
+	}))
+	runtime.Globals.Define("is_finite", builtin{"is_finite", func(arguments []Value) (Value, error) {
+		if len(arguments) != 1 {
+			return nil, fmt.Errorf("is_finite expects 1 number")
+		}
+		value, ok := numberAsFloat(arguments[0])
+		if !ok {
+			return nil, fmt.Errorf("is_finite argument must be a number")
+		}
+		return !math.IsInf(value, 0) && !math.IsNaN(value), nil
+	}})
 }
 
 func listAndCallback(name string, arguments []Value) ([]Value, Value, error) {
@@ -416,7 +613,7 @@ func listAndCallback(name string, arguments []Value) ([]Value, Value, error) {
 
 func isCallable(value Value) bool {
 	switch value.(type) {
-	case builtin, *function:
+	case builtin, *function, *structType:
 		return true
 	default:
 		return false
@@ -486,12 +683,45 @@ func clampSliceIndex(index int64, length int) int {
 }
 
 func orderableType(value Value) string {
-	switch value.(type) {
-	case int64, float64:
+	switch value := value.(type) {
+	case int64:
 		return "number"
+	case float64:
+		if !math.IsNaN(value) {
+			return "number"
+		}
+		return ""
 	case string:
 		return "string"
 	default:
 		return ""
+	}
+}
+
+func numericFunction(name string, arity int, evaluate func([]float64) (Value, error)) builtin {
+	return builtin{name, func(arguments []Value) (Value, error) {
+		if len(arguments) != arity {
+			return nil, fmt.Errorf("%s expects %d arguments, got %d", name, arity, len(arguments))
+		}
+		values := make([]float64, len(arguments))
+		for index, argument := range arguments {
+			value, ok := numberAsFloat(argument)
+			if !ok {
+				return nil, fmt.Errorf("%s argument %d must be a number", name, index+1)
+			}
+			values[index] = value
+		}
+		return evaluate(values)
+	}}
+}
+
+func numberAsFloat(value Value) (float64, bool) {
+	switch number := value.(type) {
+	case int64:
+		return float64(number), true
+	case float64:
+		return number, true
+	default:
+		return 0, false
 	}
 }

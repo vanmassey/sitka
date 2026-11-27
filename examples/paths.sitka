@@ -1,0 +1,6 @@
+let path = path_join("docs", "..", "examples", "fibonacci.sitka")
+
+print path_clean(path)
+print path_base(path)
+print path_ext(path)
+print path_rel(".", path)

@@ -1,0 +1,7 @@
+let greeting = "こんにちは世界"
+let padded = pad_left("Sitka", 8, "🙂")
+
+print substring(greeting, 2, 5)
+print rune_at(greeting, -1)
+print padded
+print join_lines(split_lines("one\r\ntwo\nthree"))

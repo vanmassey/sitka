@@ -56,6 +56,11 @@ const (
 	TokenSemicolon
 	TokenNewline
 	TokenEnd
+	TokenImport
+	TokenStruct
+	TokenTry
+	TokenCatch
+	TokenThrow
 )
 
 type Token struct {
@@ -78,6 +83,11 @@ var keywords = map[string]TokenKind{
 	"break":    TokenBreak,
 	"continue": TokenContinue,
 	"print":    TokenPrint,
+	"import":   TokenImport,
+	"struct":   TokenStruct,
+	"try":      TokenTry,
+	"catch":    TokenCatch,
+	"throw":    TokenThrow,
 	"true":     TokenTrue,
 	"false":    TokenFalse,
 	"nil":      TokenNil,
@@ -89,7 +99,7 @@ func (kind TokenKind) String() string {
 		"while", "for", "in", "return", "break", "continue", "print", "true",
 		"false", "nil", "+", "-", "*", "/", "%", "!", "=", "==", "!=", "<",
 		"<=", ">", ">=", "&&", "||", "(", ")", "{", "}", "[", "]", ",", ".",
-		":", ";", "newline", "end",
+		":", ";", "newline", "end", "import", "struct", "try", "catch", "throw",
 	}
 	if int(kind) >= 0 && int(kind) < len(names) {
 		return names[kind]
@@ -331,8 +341,15 @@ func Lex(source string) ([]Token, error) {
 
 func collapseNewlines(tokens []Token) []Token {
 	result := make([]Token, 0, len(tokens))
-	for _, token := range tokens {
+	for index, token := range tokens {
 		if token.Kind == TokenNewline {
+			if index+1 < len(tokens) {
+				next := tokens[index+1].Kind
+				if next == TokenRightParen || next == TokenRightBracket ||
+					next == TokenRightBrace || next == TokenComma {
+					continue
+				}
+			}
 			if len(result) == 0 || result[len(result)-1].Kind == TokenNewline ||
 				result[len(result)-1].Kind == TokenLeftBrace ||
 				result[len(result)-1].Kind == TokenComma ||

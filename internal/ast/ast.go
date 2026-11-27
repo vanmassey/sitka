@@ -127,6 +127,24 @@ type ReturnStmt struct {
 func (ReturnStmt) isNode() {}
 func (ReturnStmt) isStmt() {}
 
+type TryStmt struct {
+	Body      Block
+	ErrorName string
+	Catch     Block
+	Line      int
+}
+
+func (TryStmt) isNode() {}
+func (TryStmt) isStmt() {}
+
+type ThrowStmt struct {
+	Value Expr
+	Line  int
+}
+
+func (ThrowStmt) isNode() {}
+func (ThrowStmt) isStmt() {}
+
 type FunctionDecl struct {
 	Name       string
 	Parameters []string
@@ -136,6 +154,24 @@ type FunctionDecl struct {
 
 func (FunctionDecl) isNode() {}
 func (FunctionDecl) isStmt() {}
+
+type ImportStmt struct {
+	Path  string
+	Alias string
+	Line  int
+}
+
+func (ImportStmt) isNode() {}
+func (ImportStmt) isStmt() {}
+
+type StructDecl struct {
+	Name   string
+	Fields []string
+	Line   int
+}
+
+func (StructDecl) isNode() {}
+func (StructDecl) isStmt() {}
 
 type Lambda struct {
 	Parameters []string
@@ -269,3 +305,14 @@ type Get struct {
 
 func (Get) isNode() {}
 func (Get) isExpr() {}
+
+type Set struct {
+	Object Expr
+	Name   string
+	Value  Expr
+	Line   int
+}
+
+func (Set) isNode() {}
+func (Set) isExpr() {}
+func (Set) isStmt() {}

@@ -1,0 +1,6 @@
+let newYear = time_unix(2026, 1, 1)
+let nextWeek = time_add(newYear, 7 * 24 * 60 * 60)
+
+print time_utc(newYear)
+print time_format(nextWeek, "2006-01-02")
+print time_parts(newYear).weekday

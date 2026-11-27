@@ -1,0 +1,8 @@
+let source = "name,language\nAda,Sitka\nGrace,COBOL\n"
+let people = csv_decode_maps(source)
+
+for person in people {
+    print person.name, "writes", person.language
+}
+
+print csv_encode_maps(people, ["language", "name"])

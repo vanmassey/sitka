@@ -1,0 +1,21 @@
+struct Task {
+    title,
+    done
+}
+
+let tasks = [
+    Task("Write the parser", true),
+    Task("Document structs", false)
+]
+
+for task in tasks {
+    if task.done {
+        print "done:", task.title
+    } else {
+        print "todo:", task.title
+    }
+}
+
+let task = tasks[1]
+task.done = true
+print json_encode(task)

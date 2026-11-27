@@ -1,0 +1,15 @@
+let records = [
+    {"name": "Ada", "team": "language"},
+    {"name": "Grace", "team": "compiler"},
+    {"name": "Barbara", "team": "language"}
+]
+
+let byTeam = group_by(records, fun(record) { return record.team })
+let indexed = key_by(records, fun(record) { return record.name })
+let sorted = sort_by(records, fun(record) { return record.name })
+let names = flat_map(records, fun(record) { return [record.name] })
+
+print names
+print byTeam.language
+print indexed.Grace.team
+print sorted[0].name, sorted[2].name

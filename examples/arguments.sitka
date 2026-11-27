@@ -1,0 +1,7 @@
+if len(args) == 0 {
+    print "No command-line arguments"
+} else {
+    for argument in args {
+        print "Argument:", argument
+    }
+}
